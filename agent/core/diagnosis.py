@@ -117,6 +117,15 @@ class DiagnosisEngine:
 
         text = self._failure_text(result)
 
+        # Lowercase once for the whole scan (Batch 11). The failure
+        # text can be the full test output; lowering it inside the
+        # per-marker check reallocated a complete lowercase copy of
+        # that text once per marker (up to 12 copies per call, and
+        # one extra per pattern prefix). Matching semantics are
+        # unchanged: marker.lower() in lowered_text is exactly
+        # marker.lower() in text.lower().
+        lowered_text = text.lower()
+
         for (
             category,
             markers,
@@ -126,7 +135,7 @@ class DiagnosisEngine:
             suggested_action,
             severity,
         ) in self.PATTERNS:
-            if any(marker.lower() in text.lower() for marker in markers):
+            if any(marker.lower() in lowered_text for marker in markers):
                 return Diagnosis(
                     category=category,
                     summary=summary,
