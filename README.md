@@ -264,8 +264,9 @@ prioritized technical debt.
 12. No version control has been initialised yet (planned as Batch 2).
 13. No logging framework — the loop prints to stdout; the `logs/` directory is
     reserved but unused.
-14. Dead code still present: `agent/core/agent.py` (`NitinCodingAgent`) is never
-    imported, and `ActionEngine.execute_actions()` is never called.
+14. Dead code removed in Batch 8: `agent/core/agent.py` (`NitinCodingAgent`) and
+    the unused `ActionEngine.execute_actions()` helper were deleted after a
+    repository-wide search confirmed nothing referenced them.
 15. `agent/config/` and `agent/prompts/` are empty placeholders; prompts are
     hard-coded in three files.
 16. Prompt/token usage grows with the full tool history embedded in every prompt.

@@ -203,32 +203,3 @@ class ActionEngine:
             "success": False,
             "error": "Action could not be executed.",
         }
-
-    # ---------------------------------------------------------
-    # EXECUTE MULTIPLE ACTIONS
-    # ---------------------------------------------------------
-
-    def execute_actions(self, actions: list[dict]) -> list[dict]:
-        """Execute multiple actions sequentially."""
-
-        if not isinstance(actions, list):
-            return [
-                {
-                    "success": False,
-                    "error": "Actions must be a list.",
-                }
-            ]
-
-        results = []
-
-        for index, action in enumerate(actions, start=1):
-            result = self.execute(action)
-
-            result["action_number"] = index
-
-            results.append(result)
-
-            if not result["success"]:
-                break
-
-        return results

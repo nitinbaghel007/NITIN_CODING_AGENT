@@ -20,8 +20,7 @@ from agent.config.settings import Settings
 from agent.core.approval import NonInteractiveApproval
 from agent.core.coding_loop import (
     CodingLoop,
-    LazyGeminiProvider,
-    LazyOpenRouterProvider,
+    LazyProvider,
 )
 from agent.providers.base import LLMProvider
 from agent.providers.failures import (
@@ -459,7 +458,7 @@ def test_missing_gemini_key_fails_over_to_openrouter(tmp_path):
     fallback = SequenceProvider()
 
     manager = ProviderManager()
-    manager.register("gemini", LazyGeminiProvider())
+    manager.register("gemini", LazyProvider(GeminiProvider))
     manager.register("openrouter", fallback)
     manager.set_default("gemini")
 

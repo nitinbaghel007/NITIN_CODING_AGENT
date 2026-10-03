@@ -49,31 +49,6 @@ class ProviderManager:
         self.providers[name] = provider
         self.provider_status[name] = "registered"
 
-    def unregister(
-        self,
-        name: str,
-    ) -> None:
-        if name not in self.providers:
-            raise RuntimeError(
-                f"Provider not available: {name}"
-            )
-
-        del self.providers[name]
-        self.provider_status.pop(
-            name,
-            None,
-        )
-
-        if self.default_provider == name:
-            if self.providers:
-                self.default_provider = (
-                    sorted(
-                        self.providers.keys()
-                    )[0]
-                )
-            else:
-                self.default_provider = ""
-
     def get(
         self,
         name: str | None = None,
@@ -199,17 +174,6 @@ class ProviderManager:
             priority = len(self.FAILOVER_ORDER)
 
         return priority, name
-
-    def has_available_provider(
-        self,
-        exclude: str | None = None,
-    ) -> bool:
-        return any(
-            name != exclude
-            and self.get_status(name)
-            not in self.UNAVAILABLE_STATUSES
-            for name in self.providers
-        )
 
     def status(self) -> dict:
         return {

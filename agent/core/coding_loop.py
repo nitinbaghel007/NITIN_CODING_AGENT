@@ -11,6 +11,7 @@ from agent.providers.base import LLMProvider
 from agent.providers.failures import (
     CATEGORY_RATE_LIMIT,
     FAILOVER_CATEGORIES,
+    RATE_LIMIT_PREFIXES,
     classify_provider_error,
 )
 from agent.providers.gemini import GeminiProvider
@@ -21,45 +22,16 @@ from agent.providers.openrouter import OpenRouterProvider
 logger = logging.getLogger(__name__)
 
 
-class LazyOpenRouterProvider(LLMProvider):
-    """Create the real OpenRouter provider only when needed."""
+class LazyProvider(LLMProvider):
+    """Create the real provider only when needed."""
 
-    def __init__(self):
+    def __init__(self, provider_factory):
+        self._provider_factory = provider_factory
         self._provider = None
 
-    def _get_provider(self) -> OpenRouterProvider:
+    def _get_provider(self) -> LLMProvider:
         if self._provider is None:
-            self._provider = OpenRouterProvider()
-
-        return self._provider
-
-    def generate(self, prompt: str) -> str:
-        """Generate a normal model response."""
-
-        return self._get_provider().generate(
-            prompt
-        )
-
-    def generate_actions(
-        self,
-        task: str,
-    ) -> dict:
-        """Generate structured coding actions."""
-
-        return self._get_provider().generate_actions(
-            task
-        )
-
-
-class LazyGeminiProvider(LLMProvider):
-    """Create the real Gemini provider only when needed."""
-
-    def __init__(self):
-        self._provider = None
-
-    def _get_provider(self) -> GeminiProvider:
-        if self._provider is None:
-            self._provider = GeminiProvider()
+            self._provider = self._provider_factory()
 
         return self._provider
 
@@ -130,12 +102,12 @@ class CodingLoop:
 
         manager.register(
             "openrouter",
-            LazyOpenRouterProvider(),
+            LazyProvider(OpenRouterProvider),
         )
 
         manager.register(
             "gemini",
-            LazyGeminiProvider(),
+            LazyProvider(GeminiProvider),
         )
 
         manager.set_default(
@@ -369,10 +341,7 @@ RESPONSE FORMAT:
                 error_message = str(exc)
 
                 if error_message.startswith(
-                    (
-                        "GEMINI_RATE_LIMIT:",
-                        "OPENROUTER_RATE_LIMIT:",
-                    )
+                    RATE_LIMIT_PREFIXES
                 ):
                     raise
 

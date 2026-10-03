@@ -1,4 +1,6 @@
-from agent.core.coding_loop import CodingLoop
+import pytest
+
+from agent.core.coding_loop import CodingLoop, LazyProvider
 from agent.providers.base import LLMProvider
 
 
@@ -138,6 +140,79 @@ def test_coding_loop_registers_openrouter():
     assert "openrouter" in (
         loop.provider_manager.available()
     )
+
+
+def test_default_manager_uses_lazy_providers(
+    monkeypatch, tmp_path
+):
+    """Batch 8 dedup regression: the merged LazyProvider class
+    keeps the default manager's behaviour exactly as before -
+    real providers are constructed only on first use, and a
+    missing key surfaces the same controlled error."""
+
+    monkeypatch.delenv(
+        "OPENROUTER_API_KEY", raising=False
+    )
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    loop = CodingLoop(str(tmp_path))
+
+    for name in ("openrouter", "gemini"):
+        provider = loop.provider_manager.providers[name]
+        assert isinstance(provider, LazyProvider)
+        # Nothing has been constructed at registration time.
+        assert provider._provider is None
+
+    with pytest.raises(
+        RuntimeError,
+        match="OPENROUTER_API_KEY is not set.",
+    ):
+        loop.provider_manager.get(
+            "openrouter"
+        ).generate("hello")
+
+    # A failed construction must not be cached.
+    assert (
+        loop.provider_manager.providers[
+            "openrouter"
+        ]._provider
+        is None
+    )
+
+
+def test_lazy_provider_constructs_once_and_delegates():
+    """Batch 8 dedup regression: LazyProvider constructs the
+    real provider exactly once, then delegates every call."""
+
+    constructions = []
+    received = []
+
+    class DelegatingProvider(LLMProvider):
+        def generate(self, prompt: str) -> str:
+            received.append(prompt)
+            return "generated"
+
+        def generate_actions(self, task: str) -> dict:
+            received.append(task)
+            return {"actions": []}
+
+    def factory():
+        constructions.append("built")
+        return DelegatingProvider()
+
+    lazy = LazyProvider(factory)
+
+    # No construction before the first call.
+    assert constructions == []
+
+    assert lazy.generate("prompt") == "generated"
+    assert lazy.generate_actions("task") == {
+        "actions": []
+    }
+
+    # One construction total, then reuse of the same instance.
+    assert constructions == ["built"]
+    assert received == ["prompt", "task"]
 
 
 def test_coding_loop_uses_provider_manager():
