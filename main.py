@@ -1,10 +1,18 @@
 import argparse
+import contextlib
 import json
+import logging
 import sys
 from pathlib import Path
 
+from agent.config.logging_setup import configure_logging
+from agent.config.settings import Settings
 from agent.core.approval import NonInteractiveApproval
 from agent.core.coding_loop import CodingLoop
+
+# Child logger of the centrally configured "agent" logger; records
+# are emitted by the handlers installed in main(), always on stderr.
+logger = logging.getLogger("agent.cli")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -101,14 +109,48 @@ def main(
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    # Logging is initialized exactly once, here, at the CLI
+    # boundary: console diagnostics go to stderr (never stdout)
+    # plus Settings.log_file when one is configured.
+    settings = Settings.from_env()
+    configure_logging(settings)
+    logger.debug("settings: %s", settings)
+
     if args.command == "run":
+        logger.info(
+            "run start: workspace=%s json=%s "
+            "non_interactive=%s",
+            args.workspace,
+            args.output_json,
+            args.non_interactive,
+        )
+
+        # --json reserves stdout for exactly one JSON document, so
+        # every print() made while the task runs (banners,
+        # progress, approval notices, provider diagnostics) is
+        # treated as a diagnostic and redirected to stderr. The
+        # redirect is torn down before the result is printed, so
+        # the JSON itself always reaches the real stdout.
+        run_stdout = (
+            sys.stderr if args.output_json else sys.stdout
+        )
+
         try:
-            result = run_task(
-                task=args.task,
-                workspace=args.workspace,
-                non_interactive=args.non_interactive,
-            )
+            with contextlib.redirect_stdout(run_stdout):
+                result = run_task(
+                    task=args.task,
+                    workspace=args.workspace,
+                    non_interactive=args.non_interactive,
+                )
         except Exception as exc:
+            # The redirect has already been restored here, so only
+            # the deterministic response below reaches stdout.
+            logger.error(
+                "run failed: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+
             if args.output_json:
                 print(
                     json.dumps(
@@ -154,6 +196,12 @@ def main(
                     ensure_ascii=False,
                 )
             )
+
+        logger.info(
+            "run finished: status=%s success=%s",
+            result.get("status"),
+            result.get("success"),
+        )
 
         return 0 if result.get("success") else 1
 

@@ -23,9 +23,20 @@ ENV_GEMINI_API_KEY = "GEMINI_API_KEY"
 ENV_GEMINI_MODEL = "GEMINI_MODEL"
 
 # -------------------------------------------------------------
+# Logging environment variables (Batch 6)
+# -------------------------------------------------------------
+ENV_LOG_LEVEL = "LOG_LEVEL"
+ENV_LOG_FILE = "LOG_FILE"
+
+# -------------------------------------------------------------
 # Default Gemini model (unchanged from the original code)
 # -------------------------------------------------------------
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+
+# -------------------------------------------------------------
+# Default logging level when LOG_LEVEL is unset or empty
+# -------------------------------------------------------------
+DEFAULT_LOG_LEVEL = "INFO"
 
 MASK = "***"
 
@@ -51,6 +62,11 @@ class Settings:
     gemini_api_key: str | None = None
     gemini_model: str = DEFAULT_GEMINI_MODEL
 
+    # Logging configuration (never secrets). LOG_LEVEL names the
+    # console/file level; LOG_FILE optionally adds a file destination.
+    log_level: str = DEFAULT_LOG_LEVEL
+    log_file: str | None = None
+
     # ---------------------------------------------------------
     # Construction
     # ---------------------------------------------------------
@@ -65,6 +81,11 @@ class Settings:
         * the model uses ``os.getenv(name, DEFAULT_GEMINI_MODEL)`` ->
           the default only when the variable is completely absent
 
+        Logging additions (Batch 6):
+
+        * ``LOG_LEVEL`` falls back to ``INFO`` when unset *or* empty
+        * ``LOG_FILE`` falls back to ``None`` when unset *or* empty
+
         :param environ: mapping to read from. Defaults to ``os.environ``.
             Tests can pass a plain ``dict`` to stay hermetic.
         """
@@ -78,6 +99,10 @@ class Settings:
                 ENV_GEMINI_MODEL,
                 DEFAULT_GEMINI_MODEL,
             ),
+            log_level=(
+                env.get(ENV_LOG_LEVEL) or DEFAULT_LOG_LEVEL
+            ),
+            log_file=env.get(ENV_LOG_FILE) or None,
         )
 
     # ---------------------------------------------------------
