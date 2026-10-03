@@ -94,7 +94,17 @@ class ActionEngine:
         # -----------------------------------------------------
 
         if tool == "list_files":
-            return self.workspace_tool.list_files()
+            try:
+                return self.workspace_tool.list_files()
+
+            except Exception as exc:
+                # A tool exception becomes a controlled
+                # failure result, never a crash.
+                return {
+                    "success": False,
+                    "tool": "list_files",
+                    "error": str(exc),
+                }
 
         # -----------------------------------------------------
         # WRITE FILE
@@ -177,7 +187,18 @@ class ActionEngine:
                     "error": "run_command requires command.",
                 }
 
-            result = self.terminal.run(command)
+            try:
+                result = self.terminal.run(command)
+
+            except Exception as exc:
+                # A tool exception becomes a controlled
+                # failure result, never a crash.
+                return {
+                    "success": False,
+                    "tool": "run_command",
+                    "command": command,
+                    "error": str(exc),
+                }
 
             return {
                 "success": result["success"],
@@ -191,7 +212,17 @@ class ActionEngine:
         # -----------------------------------------------------
 
         if tool == "run_tests":
-            result = self.tests.run_pytest()
+            try:
+                result = self.tests.run_pytest()
+
+            except Exception as exc:
+                # A tool exception becomes a controlled
+                # failure result, never a crash.
+                return {
+                    "success": False,
+                    "tool": "run_tests",
+                    "error": str(exc),
+                }
 
             return {
                 "success": result["success"],

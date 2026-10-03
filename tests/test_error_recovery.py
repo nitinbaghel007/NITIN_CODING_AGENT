@@ -201,3 +201,89 @@ def test_coding_loop_does_not_retry_rate_limit(
     assert result["success"] is False
     assert result["status"] == "rate_limit"
     assert provider.calls == 1
+
+
+# =========================================================
+# Batch 9 Phase 5: recovery bounds and markers
+# =========================================================
+
+
+def test_error_recovery_constants_match_configuration():
+    assert ErrorRecoveryManager.MAX_RETRIES == 2
+    assert ErrorRecoveryManager.RETRY_DELAYS == (1, 2)
+
+
+def test_error_recovery_non_retryable_marker_wins():
+    """A transient marker never wins over an auth marker in
+    the same message."""
+
+    manager = ErrorRecoveryManager()
+
+    assert manager.should_retry(
+        "HTTP 500 AUTHENTICATION failed",
+        0,
+    ) is False
+
+
+def test_error_recovery_unknown_message_not_retried():
+    manager = ErrorRecoveryManager()
+
+    assert manager.should_retry(
+        "something inexplicable happened",
+        0,
+    ) is False
+
+
+def test_error_recovery_404_is_not_retried():
+    manager = ErrorRecoveryManager()
+
+    assert (
+        manager.should_retry("HTTP 404 not found", 0)
+        is False
+    )
+
+
+def test_error_recovery_delay_never_below_one():
+    manager = ErrorRecoveryManager()
+
+    assert manager.retry_delay(0) == 1
+
+
+def test_error_recovery_sleep_is_isolated(monkeypatch):
+    slept = []
+
+    monkeypatch.setattr(
+        "agent.core.error_recovery.time.sleep",
+        slept.append,
+    )
+
+    ErrorRecoveryManager().sleep(2)
+
+    assert slept == [2]
+
+
+def test_coding_loop_transient_exhaustion_is_bounded(
+    monkeypatch, tmp_path
+):
+    """One initial attempt plus MAX_RETRIES retries, then a
+    controlled failure - never an infinite retry loop."""
+
+    provider = RecoveryProvider(
+        [RuntimeError("HTTP 503 service unavailable")]
+    )
+
+    manager = ProviderManager()
+    manager.register("openrouter", provider)
+    manager.set_default("openrouter")
+
+    loop = CodingLoop(str(tmp_path), provider_manager=manager)
+
+    monkeypatch.setattr(
+        "agent.core.error_recovery.time.sleep",
+        lambda delay: None,
+    )
+
+    result = loop.run("Always transient provider failure.")
+
+    assert result["status"] == "ai_error"
+    assert provider.calls == 3

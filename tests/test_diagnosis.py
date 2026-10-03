@@ -105,3 +105,131 @@ def test_diagnosis_unknown_failure():
 
     assert diagnosis["category"] == "test_failure"
     assert diagnosis["severity"] == "medium"
+
+
+# =========================================================
+# Batch 9 Phase 4: remaining diagnosis contracts
+# =========================================================
+
+
+def test_diagnosis_permission_error():
+    diagnosis = DiagnosisEngine().diagnose(
+        {
+            "success": False,
+            "result": {
+                "output": "PermissionError: [Errno 13]",
+            },
+        }
+    )
+
+    assert diagnosis["category"] == "permission_error"
+    assert diagnosis["severity"] == "high"
+
+
+def test_diagnosis_invalid_result_for_non_dict():
+    engine = DiagnosisEngine()
+
+    for bad_input in ("a string", [], None, 42):
+        diagnosis = engine.diagnose(bad_input)
+
+        assert diagnosis["category"] == "invalid_result"
+        assert diagnosis["severity"] == "high"
+
+
+def test_diagnosis_insufficient_context_falls_back():
+    engine = DiagnosisEngine()
+
+    for empty in ({}, {"success": False}):
+        diagnosis = engine.diagnose(empty)
+
+        assert diagnosis["category"] == "test_failure"
+        assert diagnosis["severity"] == "medium"
+
+
+def test_diagnosis_reads_top_level_failure_keys():
+    diagnosis = DiagnosisEngine().diagnose(
+        {
+            "success": False,
+            "stderr": "NameError: name 'x' is undefined",
+        }
+    )
+
+    assert diagnosis["category"] == "name_error"
+
+
+def test_diagnosis_ignores_non_dict_nested_result():
+    diagnosis = DiagnosisEngine().diagnose(
+        {
+            "success": False,
+            "result": "raw non-dict payload",
+            "error": "TypeError: bad operand type",
+        }
+    )
+
+    assert diagnosis["category"] == "type_error"
+
+
+def test_diagnosis_marker_matching_is_case_insensitive():
+    diagnosis = DiagnosisEngine().diagnose(
+        {
+            "success": False,
+            "output": "syntaxerror: invalid syntax",
+        }
+    )
+
+    assert diagnosis["category"] == "syntax_error"
+
+
+def test_diagnosis_pattern_order_prefers_syntax_error():
+    """PATTERNS are evaluated in declaration order, so the
+    first matching pattern wins when several markers appear."""
+
+    diagnosis = DiagnosisEngine().diagnose(
+        {
+            "success": False,
+            "output": "TypeError while handling SyntaxError",
+        }
+    )
+
+    assert diagnosis["category"] == "syntax_error"
+
+
+def test_diagnosis_to_dict_has_stable_keys():
+    diagnosis = DiagnosisEngine().diagnose(
+        {"success": False, "output": "boom"}
+    )
+
+    assert set(diagnosis) == {
+        "category",
+        "summary",
+        "likely_cause",
+        "affected_area",
+        "suggested_action",
+        "severity",
+    }
+
+
+def test_diagnosis_is_deterministic():
+    engine = DiagnosisEngine()
+    result = {
+        "success": False,
+        "result": {"stderr": "AssertionError: 1 == 2"},
+    }
+
+    first = engine.diagnose(result)
+    second = engine.diagnose(result)
+
+    assert first == second
+    assert first["category"] == "assertion_failure"
+
+
+def test_diagnosis_provider_failure_is_controlled():
+    diagnosis = DiagnosisEngine().diagnose(
+        {
+            "success": False,
+            "error": "HTTP 500 internal server error",
+        }
+    )
+
+    assert diagnosis["category"] == "test_failure"
+    assert diagnosis["severity"] == "medium"
