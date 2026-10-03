@@ -1,3 +1,4 @@
+import re
 import subprocess
 from pathlib import Path
 
@@ -9,6 +10,11 @@ class TerminalTool:
         "python",
         "pytest",
         "git",
+        # pip/npm are never SAFE in SafetyManager: they always go
+        # through approval first, and approval must be able to reach
+        # the execution layer afterwards.
+        "pip",
+        "npm",
     }
 
     BLOCKED_COMMANDS = {
@@ -37,14 +43,23 @@ class TerminalTool:
 
         first_word = command_lower.split()[0]
 
-        if first_word in self.BLOCKED_COMMANDS:
+        # Match on the executable itself, not its file extension, so
+        # "python.exe" is the same executable as "python" and
+        # "PowerShell.exe" cannot dodge the blocked list.
+        executable = re.sub(
+            r"\.(exe|cmd|bat|com|ps1)$",
+            "",
+            first_word,
+        )
+
+        if executable in self.BLOCKED_COMMANDS:
             raise PermissionError(
-                f"Command blocked for safety: {first_word}"
+                f"Command blocked for safety: {executable}"
             )
 
-        if first_word not in self.ALLOWED_COMMANDS:
+        if executable not in self.ALLOWED_COMMANDS:
             raise PermissionError(
-                f"Command not allowed: {first_word}"
+                f"Command not allowed: {executable}"
             )
 
     def run(self, command: str, timeout: int = 60) -> dict:

@@ -48,45 +48,89 @@ class SafetyManager:
         "npm update",
     }
 
-    SAFE_COMMANDS = {
-        "python --version",
-        "python -m pytest",
-        "pytest",
-        "pytest -q",
-        "pytest -v",
-        "git status",
-        "git diff",
-        "git log",
+    # -----------------------------------------------------
+    # SAFE COMMAND STRUCTURE
+    # -----------------------------------------------------
+    # Commands are matched on their *structure* (executable + expected
+    # subcommand), not on the whole raw string, so legitimate arguments
+    # such as flags and relative test paths stay SAFE.
+    #
+    # A command is only SAFE when:
+    #   * its executable matches one of the rules below,
+    #   * every argument looks like an ordinary relative argument, and
+    #   * it contains no unquoted shell control character.
+    SAFE_GIT_SUBCOMMANDS = {
+        "status",
+        "diff",
+        "log",
     }
 
-    BLOCKED_COMMAND_MARKERS = (
+    # Ordinary argument characters: flags, relative paths, selectors.
+    SAFE_ARG_PATTERN = re.compile(
+        r"^[A-Za-z0-9_.\-/\\:=,\[\]'+~#@]+$"
+    )
+
+    # A Windows drive reference anywhere in an argument
+    # (e.g. C:\evil.txt or --output=C:\evil.txt).
+    DRIVE_REFERENCE_PATTERN = re.compile(
+        r"[A-Za-z]:[\\/]"
+    )
+
+    # -----------------------------------------------------
+    # DANGEROUS COMMAND TOKENS
+    # -----------------------------------------------------
+    # Matching is on WHOLE tokens only - never on arbitrary substrings.
+    # The first two tokens are the command and its first argument, so:
+    #     format C:            -> token "format"      -> BLOCKED
+    #     git rm file          -> token "rm" (index 1)-> BLOCKED
+    #     python -m pytest tests/test_format.py
+    #                         -> token is the path    -> SAFE
+    #     git log --format=%h  -> token is --format=%h-> not blocked
+    DANGEROUS_TOKENS = {
+        # Windows system / destructive commands
         "format",
         "shutdown",
         "restart-computer",
         "stop-computer",
         "diskpart",
-        "cipher /w",
-        "vssadmin delete",
         "bcdedit",
         "takeown",
-        "icacls ",
-        "reg delete",
-        "reg add",
-        "net user",
-        "net localgroup",
-        "del ",
-        "erase ",
-        "rmdir ",
-        "rd ",
-        "rm ",
+        "icacls",
+        "reg",
+        "net",
+        "cipher",
+        "vssadmin",
+        "taskkill",
+        "del",
+        "erase",
+        "rmdir",
+        "rd",
+        # Shells (TerminalTool refuses these too)
+        "cmd",
+        "powershell",
+        "powershell_ise",
+        # Unix destructive commands
+        "rm",
+        "mkfs",
+        "dd",
+        # PowerShell cmdlets
         "remove-item",
         "remove-itemproperty",
-        "set-content ",
-        "clear-content ",
+        "set-content",
+        "clear-content",
         "invoke-expression",
-        "iex ",
-    )
+        "iex",
+    }
 
+    # -----------------------------------------------------
+    # SHELL CONTROL CHARACTERS
+    # -----------------------------------------------------
+    # Unquoted occurrences of these make a shell chain: ``&``/``&&``
+    # and ``|``/``||`` sequence commands, ``;`` separates them, ``>``/
+    # ``<`` redirect, ``\n``/``\r`` start a new command line. Any of
+    # them outside quotes blocks the command outright.
+    # Detected outside quotes only: cmd.exe does not treat these as
+    # operators while they are inside a quoted argument or path.
     SHELL_CONTROL_CHARS = (
         "&",
         "|",
@@ -94,6 +138,8 @@ class SafetyManager:
         ">",
         "<",
         "`",
+        "\n",
+        "\r",
     )
 
     def __init__(self, workspace: str):
@@ -197,32 +243,54 @@ class SafetyManager:
             command.strip().lower(),
         )
 
-        for marker in self.BLOCKED_COMMAND_MARKERS:
-            if (
-                normalized == marker
-                or normalized.startswith(marker + " ")
-                or marker in normalized
-            ):
+        tokens = self._tokenize(command)
+
+        # 1. Dangerous command tokens (whole-token match, not substring).
+        #    Checked first so dangerous commands stay blocked even when
+        #    they also contain shell control characters.
+        for token in tokens[:2]:
+            bare = self._normalize_executable(token)
+            if bare in self.DANGEROUS_TOKENS:
                 return SafetyDecision(
                     SafetyLevel.BLOCKED,
-                    f"Dangerous command pattern is blocked: {marker}",
+                    f"Dangerous command is blocked: {bare}",
                 )
 
-        if any(
-            char in command
-            for char in self.SHELL_CONTROL_CHARS
-        ):
+        # 1b. Every segment of a chained command is checked, so
+        #     "python --version & rm -rf /" cannot smuggle a dangerous
+        #     executable past the two-token check above.
+        for segment in self._split_segments(command):
+            segment_tokens = self._tokenize(segment)
+            if not segment_tokens:
+                continue
+            bare = self._normalize_executable(segment_tokens[0])
+            if bare in self.DANGEROUS_TOKENS:
+                return SafetyDecision(
+                    SafetyLevel.BLOCKED,
+                    f"Dangerous command is blocked: {bare}",
+                )
+
+        # 2. Shell chains are BLOCKED, not approval-gated. Chaining,
+        #    piping and redirection let a second command run under the
+        #    cover of an approved one, and TerminalTool executes with
+        #    shell=True, so approval is not an acceptable answer here.
+        #    Operators inside properly quoted arguments are not shell
+        #    syntax and do not trigger this rule; unbalanced quotes are
+        #    treated as unquoted (conservative direction).
+        if self._unquoted_control_chars(command):
             return SafetyDecision(
-                SafetyLevel.APPROVAL,
-                "Shell control characters require approval.",
+                SafetyLevel.BLOCKED,
+                "Shell command chaining, piping, or redirection is blocked.",
             )
 
-        if normalized in self.SAFE_COMMANDS:
+        # 3. Structurally safe commands (allowlist of command shapes).
+        if self._matches_safe_command(command, tokens):
             return SafetyDecision(
                 SafetyLevel.SAFE,
                 "Command is on the safe command allowlist.",
             )
 
+        # 4. Known prefixes that change the environment or repository.
         for prefix in self.APPROVAL_COMMAND_PREFIXES:
             if normalized == prefix or normalized.startswith(
                 prefix + " "
@@ -232,7 +300,218 @@ class SafetyManager:
                     "Command can change the environment or repository and requires approval.",
                 )
 
+        # 5. Default deny: unknown commands require approval.
         return SafetyDecision(
             SafetyLevel.APPROVAL,
             "Command is not on the safe allowlist.",
         )
+
+    @staticmethod
+    def _tokenize(command: str) -> list:
+        """Split a command into tokens, honouring quoted arguments.
+
+        Quote characters are kept on the token so callers can strip
+        them again. Quotes never hide a token boundary: a quoted
+        argument such as ``"a b"`` stays a single token.
+        """
+        tokens = []
+        current = []
+        in_double = False
+        in_single = False
+
+        for char in command:
+            if char == '"' and not in_single:
+                in_double = not in_double
+                current.append(char)
+            elif char == "'" and not in_double:
+                in_single = not in_single
+                current.append(char)
+            elif (
+                char.isspace()
+                and not in_double
+                and not in_single
+            ):
+                if current:
+                    tokens.append("".join(current))
+                    current = []
+            else:
+                current.append(char)
+
+        if current:
+            tokens.append("".join(current))
+
+        return tokens
+
+    @staticmethod
+    def _strip_quotes(token: str) -> str:
+        """Remove one matching pair of surrounding quotes."""
+        if (
+            len(token) >= 2
+            and token[0] == token[-1]
+            and token[0] in {'"', "'"}
+        ):
+            return token[1:-1]
+        return token
+
+    @classmethod
+    def _normalize_executable(cls, token: str) -> str:
+        """Quote-strip, lower-case and drop a trailing executable suffix.
+
+        ``PowerShell.exe`` and ``powershell`` must classify the same way,
+        otherwise an extension is enough to dodge a rule.
+        """
+        bare = cls._strip_quotes(token).lower()
+        return re.sub(
+            r"\.(exe|cmd|bat|com|ps1)$",
+            "",
+            bare,
+        )
+
+    @classmethod
+    def _split_segments(cls, command: str) -> list:
+        """Split a command on unquoted shell control characters.
+
+        Returns the individual commands a shell would run in sequence,
+        so each one can be classified on its own. Quoted operators are
+        not separators (cmd.exe ignores them inside quotes), and
+        unbalanced quotes fall back to splitting everywhere.
+        """
+        segments = []
+        current = []
+        in_double = False
+        in_single = False
+
+        for char in command:
+            if char == '"' and not in_single:
+                in_double = not in_double
+                current.append(char)
+            elif char == "'" and not in_double:
+                in_single = not in_single
+                current.append(char)
+            elif (
+                not in_double
+                and not in_single
+                and char in cls.SHELL_CONTROL_CHARS
+            ):
+                segments.append("".join(current))
+                current = []
+            else:
+                current.append(char)
+
+        segments.append("".join(current))
+
+        return [
+            segment
+            for segment in segments
+            if segment.strip()
+        ]
+
+    @classmethod
+    def _unquoted_control_chars(cls, command: str) -> list:
+        """Return shell control characters that sit outside quotes.
+
+        cmd.exe only honours ``&``, ``|``, ``;``, ``>`` and ``<`` as
+        operators when they are unquoted, so a ``>`` inside a quoted
+        argument or path must not be treated as redirection. If the
+        quotes are unbalanced the command cannot be analysed safely,
+        so every control character counts (conservative direction).
+        """
+        found = []
+        in_double = False
+        in_single = False
+
+        for char in command:
+            if char == '"' and not in_single:
+                in_double = not in_double
+            elif char == "'" and not in_double:
+                in_single = not in_single
+            elif (
+                not in_double
+                and not in_single
+                and char in cls.SHELL_CONTROL_CHARS
+            ):
+                found.append(char)
+
+        if in_double or in_single:
+            return [
+                char
+                for char in command
+                if char in cls.SHELL_CONTROL_CHARS
+            ]
+
+        return found
+
+    @classmethod
+    def _matches_safe_command(
+        cls,
+        command: str,
+        tokens: list,
+    ) -> bool:
+        """True when the command matches an allowlisted shape.
+
+        Only read-only, workspace-local command shapes are allowed:
+        ``python --version``, ``python -m pytest ...``, ``pytest ...``
+        and the read-only ``git`` subcommands. Arguments are checked
+        individually so flags and relative test paths stay safe while
+        absolute paths and parent traversal do not.
+
+        The shell-chain rule is re-checked here so the allowlist can
+        never hand back SAFE for a chained or redirected command, no
+        matter which check runs first.
+        """
+        if not tokens:
+            return False
+
+        if cls._unquoted_control_chars(command):
+            return False
+
+        head = cls._normalize_executable(tokens[0])
+        args = [
+            cls._strip_quotes(token).lower()
+            for token in tokens[1:]
+        ]
+
+        if head == "python":
+            if args == ["--version"]:
+                return True
+
+            if args[:2] == ["-m", "pytest"]:
+                return cls._safe_args(args[2:])
+
+            return False
+
+        if head == "pytest":
+            return cls._safe_args(args)
+
+        if (
+            head == "git"
+            and args
+            and args[0] in cls.SAFE_GIT_SUBCOMMANDS
+        ):
+            return cls._safe_args(args[1:])
+
+        return False
+
+    @classmethod
+    def _safe_args(cls, args: list) -> bool:
+        """True when every argument is an ordinary relative argument."""
+        for arg in args:
+            if not cls.SAFE_ARG_PATTERN.match(arg):
+                return False
+
+            if arg.startswith("/"):
+                return False
+
+            if arg.startswith("\\"):
+                return False
+
+            if cls.DRIVE_REFERENCE_PATTERN.search(arg):
+                return False
+
+            if Path(arg).is_absolute():
+                return False
+
+            if ".." in Path(arg).parts:
+                return False
+
+        return True

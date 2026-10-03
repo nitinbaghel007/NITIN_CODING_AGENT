@@ -9,10 +9,12 @@ from agent.core.coding_loop import CodingLoop
 from agent.core.safety import SafetyDecision, SafetyLevel
 
 # An action SafetyManager classifies as APPROVAL (not on the safe
-# allowlist), so it can only run if approval is granted.
+# allowlist), so it can only run if approval is granted. Batch 4 made
+# "python -m pytest -q" structurally SAFE, so this fixture uses a
+# command that requires approval under both the old and new rules.
 APPROVAL_ACTION = {
     "tool": "run_command",
-    "command": "python -m pytest -q",
+    "command": "pip install example-package",
 }
 
 SAFE_ACTION = {
