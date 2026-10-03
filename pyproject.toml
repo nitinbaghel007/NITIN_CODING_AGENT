@@ -1,0 +1,40 @@
+[project]
+name = "nitin-coding-agent"
+version = "0.1.0"
+description = "Nitin Coding Agent - autonomous coding assistant."
+readme = "README.md"
+requires-python = ">=3.13"
+
+# Direct runtime dependencies (pinned to the versions verified in the audit).
+# Installation path documented in README.md uses requirements.txt.
+dependencies = [
+    "requests==2.34.2",
+    "google-genai==2.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+]
+
+# -------------------------------------------------------------
+# Pytest configuration
+# -------------------------------------------------------------
+# testpaths  : only the project's own test suite is collected by a
+#              bare `pytest` / `python -m pytest`, so the sandbox
+#              copies under workspace/ and the deliberately buggy
+#              fixture under AUTONOMOUS_TEST_PROJECT/ can no longer
+#              collide with the real suite (duplicate module names).
+# pythonpath : puts the project root on sys.path so `import main`
+#              and `from agent...` resolve regardless of whether the
+#              suite is launched via `pytest` or `python -m pytest`.
+# -------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "integration: exercises several modules together, still offline",
+    "e2e: full end-to-end run, may require recorded provider responses",
+    "slow: takes noticeably longer than the rest of the suite",
+]
