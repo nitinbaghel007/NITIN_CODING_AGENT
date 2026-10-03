@@ -106,6 +106,11 @@ class GeminiProvider(LLMProvider):
                         "Gemini returned an empty response."
                     )
 
+                if not isinstance(text, str):
+                    raise RuntimeError(
+                        "Gemini returned a non-text response."
+                    )
+
                 return text
 
             except errors.ServerError as exc:

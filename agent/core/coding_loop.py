@@ -1,4 +1,5 @@
 import json
+import logging
 
 from agent.core.action_engine import ActionEngine
 from agent.core.approval import ApprovalManager
@@ -7,9 +8,17 @@ from agent.core.diagnosis import DiagnosisEngine
 from agent.core.error_recovery import ErrorRecoveryManager
 from agent.core.fix_loop import FixLoopGuard
 from agent.providers.base import LLMProvider
+from agent.providers.failures import (
+    CATEGORY_RATE_LIMIT,
+    FAILOVER_CATEGORIES,
+    classify_provider_error,
+)
 from agent.providers.gemini import GeminiProvider
 from agent.providers.manager import ProviderManager
 from agent.providers.openrouter import OpenRouterProvider
+
+# Part of the Batch 6 "agent" logger hierarchy (central config).
+logger = logging.getLogger(__name__)
 
 
 class LazyOpenRouterProvider(LLMProvider):
@@ -317,6 +326,31 @@ RESPONSE FORMAT:
             and test_result.get("return_code") == 0
         )
 
+    @staticmethod
+    def _validate_plan_shape(plan) -> None:
+        """Reject a malformed provider plan with a controlled error.
+
+        A wrong-shaped plan must surface as a provider response
+        failure (classified, failover-eligible), never as an
+        obscure AttributeError while unrelated code processes it.
+        """
+
+        if not isinstance(plan, dict):
+            raise ValueError(
+                "Provider returned an unexpected response shape "
+                "(plan is not an object)."
+            )
+
+        actions = plan.get("actions")
+
+        if actions is not None and not isinstance(
+            actions, list
+        ):
+            raise ValueError(
+                "Provider returned an unexpected response shape "
+                "('actions' is not a list)."
+            )
+
     def _generate_plan_with_recovery(
         self,
         provider,
@@ -330,7 +364,7 @@ RESPONSE FORMAT:
 
         while True:
             try:
-                return provider.generate_actions(prompt)
+                plan = provider.generate_actions(prompt)
             except Exception as exc:
                 error_message = str(exc)
 
@@ -369,6 +403,91 @@ RESPONSE FORMAT:
                 )
 
                 recovery.sleep(delay)
+                continue
+
+            self._validate_plan_shape(plan)
+            return plan
+
+    def _mark_provider_status(
+        self,
+        provider_name: str,
+        status: str,
+    ) -> None:
+        """Set a provider status only when it is registered.
+
+        A misconfigured default (no such registered provider) must
+        not raise inside the failure handler: the run still has to
+        end in a controlled result instead of crashing.
+        """
+
+        if (
+            provider_name
+            in self.provider_manager.providers
+        ):
+            self.provider_manager.set_status(
+                provider_name,
+                status,
+            )
+
+    def _record_failover(
+        self,
+        provider_name: str,
+        next_provider: str,
+        error_message: str,
+    ) -> None:
+        """Switch the run to the fallback provider after a failure.
+
+        Shared by the pre-existing rate-limit path and the Batch 7
+        failure-category path so bookkeeping, history, logging and
+        the user-visible notice stay identical for both.
+        """
+
+        failover_result = {
+            "success": False,
+            "status": "provider_failover",
+            "from_provider": provider_name,
+            "to_provider": next_provider,
+            "error": error_message,
+        }
+
+        self.context_manager.add_history(
+            None,
+            failover_result,
+        )
+
+        self.context_manager.set_provider(
+            next_provider
+        )
+        self.context_manager.clear_error()
+        self.context_manager.set_status(
+            "running"
+        )
+
+        logger.info(
+            "provider failover: from=%s to=%s",
+            provider_name,
+            next_provider,
+        )
+
+        print(
+            "\n========================================"
+        )
+        print(
+            " PROVIDER FAILOVER"
+        )
+        print(
+            "========================================"
+        )
+        print(
+            f"\nFailed provider: {provider_name}"
+        )
+        print(
+            f"Next provider: {next_provider}"
+        )
+        print(
+            "\nContinuing the same coding task "
+            "with the free provider."
+        )
 
     def run(
         self,
@@ -433,20 +552,24 @@ RESPONSE FORMAT:
                     provider_name,
                 )
 
-            except RuntimeError as exc:
+            except Exception as exc:
                 error_message = str(exc)
+                category = classify_provider_error(exc)
 
                 self.context_manager.set_error(
                     error_message
                 )
 
-                if error_message.startswith(
-                    (
-                        "GEMINI_RATE_LIMIT:",
-                        "OPENROUTER_RATE_LIMIT:",
-                    )
-                ):
-                    self.provider_manager.set_status(
+                logger.warning(
+                    "provider failure: provider=%s "
+                    "category=%s error=%s",
+                    provider_name,
+                    category,
+                    error_message,
+                )
+
+                if category == CATEGORY_RATE_LIMIT:
+                    self._mark_provider_status(
                         provider_name,
                         "rate_limited",
                     )
@@ -464,48 +587,19 @@ RESPONSE FORMAT:
                         next_provider = None
 
                     if next_provider is not None:
-                        failover_result = {
-                            "success": False,
-                            "status": "provider_failover",
-                            "from_provider": provider_name,
-                            "to_provider": next_provider,
-                            "error": error_message,
-                        }
-
-                        self.context_manager.add_history(
-                            None,
-                            failover_result,
+                        self._record_failover(
+                            provider_name,
+                            next_provider,
+                            error_message,
                         )
-
-                        self.context_manager.set_provider(
-                            next_provider
-                        )
-                        self.context_manager.clear_error()
-                        self.context_manager.set_status(
-                            "running"
-                        )
-
-                        print(
-                            "\n========================================"
-                        )
-                        print(
-                            " PROVIDER FAILOVER"
-                        )
-                        print(
-                            "========================================"
-                        )
-                        print(
-                            f"\nFailed provider: {provider_name}"
-                        )
-                        print(
-                            f"Next provider: {next_provider}"
-                        )
-                        print(
-                            "\nContinuing the same coding task "
-                            "with the free provider."
-                        )
-
                         continue
+
+                    logger.error(
+                        "no fallback provider available: "
+                        "provider=%s category=%s",
+                        provider_name,
+                        category,
+                    )
 
                     self.context_manager.set_status(
                         "rate_limit"
@@ -549,13 +643,50 @@ RESPONSE FORMAT:
                         ),
                     }
 
-                self.provider_manager.set_status(
+                if category in FAILOVER_CATEGORIES:
+                    self._mark_provider_status(
+                        provider_name,
+                        "error",
+                    )
+
+                    next_provider = (
+                        self.provider_manager.failover(
+                            provider_name
+                        )
+                        if provider_name
+                        in ProviderManager.FAILOVER_ORDER
+                        else None
+                    )
+
+                    if next_provider is not None:
+                        self._record_failover(
+                            provider_name,
+                            next_provider,
+                            error_message,
+                        )
+                        continue
+
+                    logger.error(
+                        "no fallback provider available: "
+                        "provider=%s category=%s",
+                        provider_name,
+                        category,
+                    )
+
+                self._mark_provider_status(
                     provider_name,
                     "error",
                 )
 
                 self.context_manager.mark_failed(
                     error_message
+                )
+
+                logger.error(
+                    "provider run failed: provider=%s "
+                    "category=%s outcome=ai_error",
+                    provider_name,
+                    category,
                 )
 
                 print("\n[AI ERROR]")
@@ -569,40 +700,9 @@ RESPONSE FORMAT:
                         self.provider_manager.get_status(
                             provider_name
                         )
-                    ),
-                    "step": step,
-                    "error": error_message,
-                    "history": list(
-                        context.history
-                    ),
-                    "context": (
-                        self.context_manager.snapshot()
-                    ),
-                }
-
-            except Exception as exc:
-                error_message = str(exc)
-
-                self.provider_manager.set_status(
-                    provider_name,
-                    "error",
-                )
-
-                self.context_manager.mark_failed(
-                    error_message
-                )
-
-                print("\n[AI ERROR]")
-                print(error_message)
-
-                return {
-                    "success": False,
-                    "status": "ai_error",
-                    "provider": provider_name,
-                    "provider_status": (
-                        self.provider_manager.get_status(
-                            provider_name
-                        )
+                        if provider_name
+                        in self.provider_manager.providers
+                        else "error"
                     ),
                     "step": step,
                     "error": error_message,

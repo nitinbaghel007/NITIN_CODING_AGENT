@@ -72,9 +72,34 @@ class OpenRouterProvider(LLMProvider):
 
         response.raise_for_status()
 
-        data = response.json()
+        # -----------------------------------------------------
+        # Response validation: a malformed or unexpected reply
+        # must become a controlled ValueError, never an obscure
+        # KeyError/IndexError/TypeError deeper in the code.
+        # -----------------------------------------------------
 
-        return data["choices"][0]["message"]["content"]
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise ValueError(
+                "OpenRouter returned invalid JSON "
+                "in the response body."
+            ) from exc
+
+        try:
+            content = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ValueError(
+                "OpenRouter returned an unexpected "
+                "response shape."
+            ) from exc
+
+        if not isinstance(content, str):
+            raise ValueError(
+                "OpenRouter returned a non-text response."
+            )
+
+        return content
 
     # =========================================================
     # JSON PARSER
