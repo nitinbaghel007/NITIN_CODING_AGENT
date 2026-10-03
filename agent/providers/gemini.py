@@ -1,11 +1,11 @@
 import json
-import os
 import re
 import time
 
 from google import genai
 from google.genai import errors
 
+from agent.config.settings import Settings
 from agent.providers.base import LLMProvider
 
 
@@ -28,14 +28,13 @@ class GeminiProvider(LLMProvider):
         self,
         model: str | None = None,
     ):
-        self.api_key = os.getenv("GEMINI_API_KEY")
+        settings = Settings.from_env()
+
+        self.api_key = settings.gemini_api_key
 
         self.model = (
             model
-            or os.getenv(
-                "GEMINI_MODEL",
-                "gemini-3.8-flash",
-            )
+            or settings.gemini_model
         )
 
         if not self.api_key:

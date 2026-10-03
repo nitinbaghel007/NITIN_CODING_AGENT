@@ -3,6 +3,7 @@ import json
 import sys
 from pathlib import Path
 
+from agent.core.approval import NonInteractiveApproval
 from agent.core.coding_loop import CodingLoop
 
 
@@ -47,12 +48,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print only the final result as JSON.",
     )
 
+    run_parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        dest="non_interactive",
+        help=(
+            "Never prompt for approval. "
+            "Approval-required actions are denied safely."
+        ),
+    )
+
     return parser
 
 
 def run_task(
     task: str,
     workspace: str,
+    non_interactive: bool = False,
 ) -> dict:
     """Run one coding task through the CodingLoop."""
 
@@ -68,9 +80,15 @@ def run_task(
             f"Workspace is not a directory: {workspace}"
         )
 
-    loop = CodingLoop(
-        str(workspace_path)
-    )
+    if non_interactive:
+        loop = CodingLoop(
+            str(workspace_path),
+            approval_callback=NonInteractiveApproval(),
+        )
+    else:
+        loop = CodingLoop(
+            str(workspace_path)
+        )
 
     return loop.run(task)
 
@@ -88,6 +106,7 @@ def main(
             result = run_task(
                 task=args.task,
                 workspace=args.workspace,
+                non_interactive=args.non_interactive,
             )
         except Exception as exc:
             if args.output_json:

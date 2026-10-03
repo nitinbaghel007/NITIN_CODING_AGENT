@@ -1,9 +1,9 @@
 import json
-import os
 import re
 
 import requests
 
+from agent.config.settings import Settings
 from agent.providers.base import LLMProvider
 
 
@@ -15,7 +15,7 @@ class OpenRouterProvider(LLMProvider):
     MAX_JSON_RETRIES = 1
 
     def __init__(self, model: str = "openrouter/free"):
-        self.api_key = os.getenv("OPENROUTER_API_KEY")
+        self.api_key = Settings.from_env().openrouter_api_key
         self.model = model
 
         if not self.api_key:
