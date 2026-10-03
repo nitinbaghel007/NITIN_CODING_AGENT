@@ -41,3 +41,12 @@ logs/
 build/
 dist/
 *.egg-info/
+
+# -------------------------------------------------------------
+# OS / editor artifacts (Windows-first project)
+# -------------------------------------------------------------
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
+.vscode/

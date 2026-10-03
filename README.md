@@ -83,13 +83,14 @@ for the template — it contains placeholders, never real keys.
 
 | Variable | Required | Used by | Notes |
 |---|---|---|---|
-| `OPENROUTER_API_KEY` | Yes* | `agent/providers/openrouter.py` | Default provider. If unset, the run stops with `OPENROUTER_API_KEY is not set.` |
-| `GEMINI_API_KEY` | Yes* | `agent/providers/gemini.py` | Fallback provider used on rate-limit failover |
+| `OPENROUTER_API_KEY` | Yes* | `agent/providers/openrouter.py` | Default provider. If unset, the loop fails over to Gemini |
+| `GEMINI_API_KEY` | Yes* | `agent/providers/gemini.py` | Fallback provider used during failover |
 | `GEMINI_MODEL` | No | `agent/providers/gemini.py` | Defaults to `gemini-3.8-flash` |
 
-\* At least one must be set for a real run. Setting only the Gemini key is **not**
-currently enough, because OpenRouter is the default provider and a missing key
-does not trigger failover — see *Current limitations*.
+\* At least one must be set for a real run. With only `GEMINI_API_KEY` set, the
+loop fails over to Gemini on the first step — a missing OpenRouter key is
+treated as a failover error (verified offline: the keyless run switches
+`openrouter → gemini` at step 1).
 
 ```powershell
 # PowerShell - session scoped
@@ -112,7 +113,7 @@ Keys are never written to disk or logged by the agent.
 ## CLI usage
 
 ```text
-python main.py run "<task>" [--workspace <dir>] [--json]
+python main.py run "<task>" [--workspace <dir>] [--json] [--non-interactive]
 ```
 
 ### Basic run
@@ -140,7 +141,9 @@ Everything the agent reads or writes is confined to that directory:
 * relative paths only, absolute paths are blocked
 * `..` traversal and symlinks that escape the directory are blocked
 * unknown tools are blocked by default
-* commands not on the safe allowlist require interactive approval (`[y/N]`)
+* commands not on the safe allowlist require interactive approval (`[y/N]`);
+  pass `--non-interactive` to deny approval-required actions safely instead
+  of prompting (unattended runs never block)
 
 ### JSON output
 
@@ -148,16 +151,16 @@ Everything the agent reads or writes is confined to that directory:
 python main.py run "List the files" --workspace workspace --json
 ```
 
-`--json` prints the final result object as JSON and makes the exit code reflect
-`success`. **Known limitation:** the loop still prints its human-readable progress
-(`STEP n/10`, actions, tool results) to stdout before the JSON document, so
-stdout is not yet machine-parseable — see *Current limitations*.
+`--json` prints **exactly one JSON document on stdout**; all human-readable
+progress (`STEP n/10`, actions, tool results) and diagnostics go to stderr, so
+stdout is machine-parseable. The exit code reflects `success` (`0` only when
+the task completed with verified tests).
 
 ---
 
 ## Running the tests
 
-All three invocations collect only `tests/` and should report **82 passed**:
+All three invocations collect only `tests/` and should report **468 passed**:
 
 ```powershell
 python -m pytest          # via python -m
@@ -199,6 +202,21 @@ the expected error path, not a crash.
 
 ---
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every **push** and **pull request**:
+
+* Windows runner (the documented supported platform), **Python 3.13**
+* `python -m pip install -r requirements.txt` — the same pinned dependencies
+  used locally, into a clean environment
+* `python -m pytest` — the exact local command; **any** test failure fails the
+  workflow (nothing is skipped, filtered, or allowed to fail)
+
+The workflow adds no coverage upload, matrix, services, or deployment jobs —
+the repository does not require them.
+
+---
+
 ## Repository layout
 
 ```text
@@ -208,68 +226,60 @@ NITIN_CODING_AGENT/
 ├── requirements.txt           pinned dependencies
 ├── .env.example               environment variable template (placeholders)
 ├── .gitignore
+├── .github/workflows/ci.yml   GitHub Actions CI (pytest on push / pull request)
 ├── agent/
-│   ├── config/                (empty, planned configuration module)
+│   ├── config/                settings + centralized logging setup
 │   ├── core/                  loop, safety, approval, diagnosis, state
-│   ├── prompts/               (empty, planned prompt registry)
+│   ├── prompts/               (empty, reserved)
 │   ├── providers/             openrouter, gemini, manager, base
 │   └── tools/                 file, terminal, test, workspace tools
-├── tests/                     82 unit tests
+├── tests/                     468 tests across 22 modules
 ├── workspace/                 default agent sandbox (runtime output)
 ├── AUTONOMOUS_TEST_PROJECT/   intentionally buggy demo task
-└── logs/                      (empty, reserved for future logging)
+└── logs/                      (empty, reserved; logging writes to stderr)
 ```
 
 ---
 
 ## Current limitations
 
-Known issues from the code audit. None are fixed yet; they are tracked as
-prioritized technical debt.
+Known issues from the code audit, current as of the CI/release batch. Items
+that later batches demonstrably fixed (machine-readable `--json`, the
+`--non-interactive` flag, missing-key failover to Gemini, centralized logging,
+direct tests for providers and tools, version control, and CI) have been
+removed; the rest are tracked as prioritized technical debt.
 
 **Correctness / behaviour**
 
-1. **`--json` is not machine-readable yet.** Progress lines are printed to stdout
-   before the JSON payload.
-2. **Missing API key does not fail over.** With only `GEMINI_API_KEY` set, the run
-   stops at step 1 with `OPENROUTER_API_KEY is not set.` instead of switching to
-   Gemini. Failover currently happens only on rate-limit errors.
-3. **Safety blocklist uses substring matching**, so a legitimate command such as
+1. **Safety blocklist uses substring matching**, so a legitimate command such as
    `python -m pytest tests/test_format.py` is blocked because it contains
    `format`.
-4. **Safe-command allowlist is exact-match**, so `python -m pytest` is safe but
+2. **Safe-command allowlist is exact-match**, so `python -m pytest` is safe but
    `python -m pytest -q` requires approval.
-5. **`pip install` / `npm install` can be approved but still cannot run** — the
+3. **`pip install` / `npm install` can be approved but still cannot run** — the
    approval layer allows them, the terminal tool's first-word allowlist rejects
    them.
-6. **Approval is interactive and blocking.** There is no `--yes` /
-   `--non-interactive` flag, so unattended runs can stall or abort when an action
-   needs approval.
-7. **`list_files` is not recursive** — it returns only the top level of the
+4. **`list_files` is not recursive** — it returns only the top level of the
    workspace.
-8. **Diagnosis `affected_area` is a static string**, not parsed from the actual
+5. **Diagnosis `affected_area` is a static string**, not parsed from the actual
    traceback.
 
 **Testing**
 
-9. `workspace/` contains `test_calculator.py` in two places with the same module
+6. `workspace/` contains `test_calculator.py` in two places with the same module
    name, so running `python -m pytest` *inside* `workspace/` fails collection
    (pre-existing issue, unrelated to the project suite).
-10. `agent/providers/openrouter.py`, `agent/tools/*` and the network paths of both
-    providers have no direct unit tests.
-11. No coverage measurement or CI is configured yet.
+7. No coverage measurement is configured — CI runs the full suite but does not
+   report coverage.
 
 **Engineering hygiene**
 
-12. No version control has been initialised yet (planned as Batch 2).
-13. No logging framework — the loop prints to stdout; the `logs/` directory is
-    reserved but unused.
-14. Dead code removed in Batch 8: `agent/core/agent.py` (`NitinCodingAgent`) and
-    the unused `ActionEngine.execute_actions()` helper were deleted after a
-    repository-wide search confirmed nothing referenced them.
-15. `agent/config/` and `agent/prompts/` are empty placeholders; prompts are
-    hard-coded in three files.
-16. Prompt/token usage grows with the full tool history embedded in every prompt.
+8. Dead code removed in Batch 8: `agent/core/agent.py` (`NitinCodingAgent`) and
+   the unused `ActionEngine.execute_actions()` helper were deleted after a
+   repository-wide search confirmed nothing referenced them.
+9. `agent/prompts/` is an empty placeholder; prompts are hard-coded.
+10. Prompt/token usage grows with the full tool history embedded in every prompt
+    (bounded by the 10-step loop — see the Batch 11 performance tests).
 
 ---
 
