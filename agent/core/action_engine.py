@@ -31,6 +31,9 @@ class ActionEngine:
         self.safety = SafetyManager(workspace)
         self.approval_callback = approval_callback
 
+        # Last failure swallowed inside the approval callback, if any.
+        self.last_approval_error: str | None = None
+
     def execute(self, action: dict) -> dict:
         """Execute a single action after safety validation."""
 
@@ -48,12 +51,20 @@ class ActionEngine:
             approved = False
 
             if self.approval_callback is not None:
-                approved = bool(
-                    self.approval_callback(
-                        action,
-                        decision,
+                try:
+                    approved = bool(
+                        self.approval_callback(
+                            action,
+                            decision,
+                        )
                     )
-                )
+                except (Exception, KeyboardInterrupt) as exc:
+                    # A failing approval mechanism must deny the action,
+                    # never crash the run and never approve it.
+                    self.last_approval_error = (
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    approved = False
 
             if not approved:
                 return {

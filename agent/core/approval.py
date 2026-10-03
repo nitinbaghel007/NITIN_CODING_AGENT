@@ -14,7 +14,70 @@ class ApprovalManager:
         action: dict,
         decision: SafetyDecision,
     ) -> bool:
-        """Ask the user whether an approval-required action may run."""
+        """Ask the user whether an approval-required action may run.
+
+        Reading the answer is best-effort. A closed stdin
+        (``EOFError``), Ctrl+C (``KeyboardInterrupt``), a broken pipe or
+        closed file (``OSError`` / ``ValueError``) all deny the action
+        instead of raising into the agent loop. Approval is never
+        implied by a failed prompt, and :meth:`_parse_response` decides
+        every answer so unexpected input cannot approve by accident.
+        """
+
+        try:
+            return self._prompt(action, decision)
+
+        except KeyboardInterrupt:
+            self._notice(
+                "\n  Approval prompt interrupted - action DENIED."
+            )
+
+        except EOFError:
+            self._notice(
+                "\n  No input available (closed stdin) - action DENIED."
+            )
+
+        except (OSError, ValueError) as exc:
+            self._notice(
+                "\n  Input unavailable "
+                f"({type(exc).__name__}) - action DENIED."
+            )
+
+        return False
+
+    @staticmethod
+    def _notice(message: str) -> None:
+        """Report a failed prompt without risking a second failure.
+
+        Reporting the denial must never be the thing that raises,
+        including when stdout itself is broken.
+        """
+
+        try:
+            print(message)
+        except Exception:
+            pass
+
+    @classmethod
+    def _parse_response(cls, response: object) -> bool:
+        """Return True only for an explicit ``y`` or ``yes``.
+
+        Case, surrounding whitespace and trailing newlines are ignored.
+        Empty input, unexpected words and non-text answers all deny, so
+        nothing can approve an action by accident.
+        """
+
+        if not isinstance(response, str):
+            return False
+
+        return response.strip().lower() in cls.APPROVE_VALUES
+
+    def _prompt(
+        self,
+        action: dict,
+        decision: SafetyDecision,
+    ) -> bool:
+        """Print the approval prompt and read the user's answer."""
 
         print("\n========================================")
         print(" APPROVAL REQUIRED")
@@ -43,7 +106,7 @@ class ApprovalManager:
             "\nAllow this action? [y/N]: "
         )
 
-        return response.strip().lower() in self.APPROVE_VALUES
+        return self._parse_response(response)
 
 
 class NonInteractiveApproval:
@@ -56,8 +119,8 @@ class NonInteractiveApproval:
     * Approval is never granted automatically - approval-required actions
       come back as ``approval_required`` and are simply not executed.
     * Any failure inside the approval path (``EOFError``, ``OSError``,
-      a broken pipe, ...) is swallowed so it can never escape into the
-      agent loop and abort the task.
+      a broken pipe, ``KeyboardInterrupt``, ...) is swallowed so it can
+      never escape into the agent loop and abort the task.
 
     Interactive behaviour is untouched: :class:`ApprovalManager` still
     prompts exactly as before when ``--non-interactive`` is not supplied.
@@ -105,8 +168,10 @@ class NonInteractiveApproval:
             approved = bool(
                 self._deny(action, decision)
             )
-        except Exception as exc:
+        except (Exception, KeyboardInterrupt) as exc:
             # The approval path must never crash an unattended run.
+            # KeyboardInterrupt is not an Exception subclass, so it is
+            # listed explicitly; SystemExit still propagates.
             self.last_error = (
                 f"{type(exc).__name__}: {exc}"
             )
