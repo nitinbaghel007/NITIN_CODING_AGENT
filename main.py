@@ -5,6 +5,8 @@ import logging
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from agent.config.logging_setup import configure_logging
 from agent.config.settings import Settings
 from agent.core.approval import NonInteractiveApproval
@@ -112,6 +114,14 @@ def main(
     # Logging is initialized exactly once, here, at the CLI
     # boundary: console diagnostics go to stderr (never stdout)
     # plus Settings.log_file when one is configured.
+    #
+    # Local development convenience: load a project .env file (if
+    # present) before reading configuration. load_dotenv()'s default
+    # behaviour never overrides variables that are already set in
+    # the OS environment, so existing environment-variable
+    # configuration keeps precedence and keeps working unchanged.
+    # A missing .env file is a no-op.
+    load_dotenv()
     settings = Settings.from_env()
     configure_logging(settings)
     logger.debug("settings: %s", settings)

@@ -19,6 +19,9 @@
 requests==2.34.2
 google-genai==2.25.0
 
+# Local .env loading at CLI startup (main.py); no transitive dependencies.
+python-dotenv==1.2.4
+
 # Development / test
 pytest==9.1.1
 

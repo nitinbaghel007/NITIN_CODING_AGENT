@@ -71,15 +71,20 @@ python -m pip install -r requirements.txt
 ```
 
 `requirements.txt` contains the exact pins from the audited environment
-(`requests==2.34.2`, `google-genai==2.25.0`, `pytest==9.1.1` plus their
-transitive dependencies).
+(`requests==2.34.2`, `google-genai==2.25.0`, `python-dotenv==1.2.4`,
+`pytest==9.1.1` plus their transitive dependencies).
 
 ---
 
 ## API keys and configuration
 
-Configuration is read from **environment variables only**. See `.env.example`
-for the template — it contains placeholders, never real keys.
+Configuration comes from **environment variables**. For local development you
+can also keep them in a `.env` file: copy `.env.example` to `.env` in the
+project folder and fill in your own values — `main.py` loads it automatically
+at startup. Variables already exported in your shell are **never overridden**
+by `.env` values, so direct environment configuration keeps working exactly
+as before. `.env.example` contains placeholders only; **never commit real API
+keys** (`.env` itself is git-ignored).
 
 | Variable | Required | Used by | Notes |
 |---|---|---|---|
