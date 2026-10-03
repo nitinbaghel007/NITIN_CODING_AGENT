@@ -323,6 +323,16 @@ RESPONSE FORMAT:
                 "('actions' is not a list)."
             )
 
+        # Only actions[0] is consumed per step. Validate exactly
+        # what the loop will process so a junk entry surfaces as
+        # a classified response failure, never an AttributeError
+        # escaping the loop.
+        if actions and not isinstance(actions[0], dict):
+            raise ValueError(
+                "Provider returned an unexpected response shape "
+                "('actions' entries must be objects)."
+            )
+
     def _generate_plan_with_recovery(
         self,
         provider,
